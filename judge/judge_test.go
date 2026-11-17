@@ -41,6 +41,7 @@ import (
 	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 
 	wa "github.com/go-authn/webauthn"
+	"github.com/go-authn/webauthn/webauthntest"
 )
 
 const (
@@ -362,5 +363,25 @@ func TestNonCanonicalCBORIsRefusedByUsOnly(t *testing.T) {
 	}
 	if _, err := rp.VerifyRegistration(challenge, cd, ao, wa.Policy{}); err == nil {
 		t.Fatal("ours accepted a non-deterministic attestation object")
+	}
+}
+
+// webauthntest is the software authenticator other repositories' tests use.
+// Its output has to be right independently of the verifier it is paired with,
+// so the independent verifier takes it too.
+func TestWebauthntestOutputIsAcceptedByTheIndependentVerifier(t *testing.T) {
+	for _, alg := range algs {
+		a, err := webauthntest.New(alg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cd, ao := a.Register(rpID, origin, challenge, webauthntest.Options{})
+		if err := otherRegistration(challenge, a.ID, cd, ao, true); err != nil {
+			t.Fatalf("alg %d: registration: %v", alg, err)
+		}
+		cd, ad, sig := a.Assert(rpID, origin, challenge, webauthntest.Options{})
+		if err := otherAssertion(challenge, a.ID, a.COSE, cd, ad, sig, true); err != nil {
+			t.Fatalf("alg %d: assertion: %v", alg, err)
+		}
 	}
 }

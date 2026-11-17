@@ -55,6 +55,10 @@ passkey reports zero throughout and is not refused. Credential-ID uniqueness
   registrations and assertions for the three algorithms. Everything generated is
   accepted by both, every refusal aimed at both is made by both, and of 12000
   random corruptions everything we accept the other accepts too.
+- `webauthntest`: a software authenticator (ES256, EdDSA, RS256; flags, counter,
+  origin and rpId bendable per ceremony) for tests of a relying party. Its output
+  is accepted by the independent verifier in `judge/`, so a test using it is not
+  only checking the verifier against code written beside it.
 - Fuzz targets for the CBOR decoder (re-encoding must reproduce the input),
   authenticator data, attestation objects, COSE keys, assertions and client data;
   the corpus is committed under `testdata/fuzz`.
