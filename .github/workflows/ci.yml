@@ -1,0 +1,154 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: "off"
+  CGO_ENABLED: "0"
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+          cache-dependency-path: judge/go.sum
+      - run: go vet ./...
+      - name: gofmt
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+      - run: go test -count=1 ./...
+
+  # The independent judge (a separate module: the library itself has no
+  # dependency). It runs wherever the library does, so a platform difference in
+  # either verifier shows up here.
+  judge:
+    name: judge (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+          cache-dependency-path: judge/go.sum
+      - run: go vet ./...
+        working-directory: judge
+      - run: go test -count=1 -v ./...
+        working-directory: judge
+
+  race:
+    name: race detector
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod, check-latest: true, cache: true, cache-dependency-path: judge/go.sum }
+      - run: go test -race -count=1 ./...
+      - run: go test -race -count=1 ./...
+        working-directory: judge
+
+  coverage:
+    name: coverage (the standard is 100%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod, check-latest: true, cache: true, cache-dependency-path: judge/go.sum }
+      - name: the library is covered to 100%
+        shell: bash
+        run: |
+          go test -count=1 -coverprofile=cover.out . | tee cover.txt
+          go tool cover -func=cover.out | tail -n 1
+          grep -q 'coverage: 100.0% of statements' cover.txt || { echo "::error::coverage fell below 100%"; exit 1; }
+
+  fuzz:
+    name: fuzz smoke ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [FuzzCBOR, FuzzAuthenticatorData, FuzzAttestationObject, FuzzCOSEKey, FuzzAssertion, FuzzClientData]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod, check-latest: true, cache: true, cache-dependency-path: judge/go.sum }
+      - run: go test -run '^${{ matrix.target }}$' -fuzz '^${{ matrix.target }}$' -fuzztime 60s .
+
+  # The toolchain is the one go.mod names, so a floor too low to carry the
+  # standard library's fixes is a finding HERE: govulncheck exits 3 on any.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod, check-latest: true, cache: true, cache-dependency-path: judge/go.sum }
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  arches:
+    name: arch ${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64, riscv64, loong64, ppc64le, s390x, 386, arm]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod, check-latest: true, cache: true, cache-dependency-path: judge/go.sum }
+      - run: GOARCH=${{ matrix.goarch }} go build ./...
+      # qemu-user-static is a virtual package on Ubuntu 26.04; qemu-user ships
+      # the dynamic qemu-<arch> that `go test -exec` needs.
+      - name: install qemu user-mode emulators
+        timeout-minutes: 10
+        run: sudo apt-get update && sudo apt-get install -y qemu-user qemu-user-binfmt
+      - name: Test
+        run: |
+          # Resolve the emulator, accept EITHER binary name, and FAIL when
+          # neither is there: a lane reporting success for an architecture it
+          # never ran is the one outcome this matrix exists to rule out.
+          qemu_for() {
+            for cand in "qemu-$1-static" "qemu-$1"; do
+              command -v "$cand" >/dev/null 2>&1 && { printf '%s\n' "$cand"; return 0; }
+            done
+            echo "::error::no qemu user emulator for $1 (looked for qemu-$1-static and qemu-$1)" >&2
+            return 1
+          }
+          case "${{ matrix.goarch }}" in
+            amd64|arm64) go test -count=1 ./... ;;
+            riscv64) e="$(qemu_for riscv64)" || exit 1; GOARCH=riscv64 go test -count=1 -exec="$e" ./... ;;
+            loong64) e="$(qemu_for loongarch64)" || exit 1; GOARCH=loong64 go test -count=1 -exec="$e" ./... ;;
+            ppc64le) e="$(qemu_for ppc64le)" || exit 1; GOARCH=ppc64le go test -count=1 -exec="$e" ./... ;;
+            s390x) e="$(qemu_for s390x)" || exit 1; GOARCH=s390x go test -count=1 -exec="$e" ./... ;;
+            386)     GOARCH=386 go test -count=1 ./... ;;
+            arm) e="$(qemu_for arm)" || exit 1; GOARCH=arm go test -count=1 -exec="$e" ./... ;;
+          esac

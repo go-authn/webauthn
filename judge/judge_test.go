@@ -148,6 +148,7 @@ func (a *authenticator) registration(t testing.TB, p params, credID []byte) (cd,
 	cd = p.clientData(t)
 	att := append(make([]byte, 16), byte(len(credID)>>8), byte(len(credID)))
 	att = append(append(att, credID...), a.cose...)
+	p.flags |= wa.FlagAT // attested credential data follows (section 6.5.1)
 	ad := p.authData(att)
 	ao = mustCBOR(t, map[string]any{"fmt": "none", "attStmt": map[string]any{}, "authData": ad})
 	return
@@ -186,7 +187,9 @@ func otherRegistration(challenge []byte, id, cd, ao []byte, uv bool) error {
 	})
 	pcc, err := protocol.ParseCredentialCreationResponseBytes(body)
 	if err != nil {
-		return detail(err)
+		// ParseCredentialCreationResponseBytes drops the cause; ask again.
+		_, inner := (&protocol.AuthenticatorAttestationResponse{ClientDataJSON: cd, AttestationObject: ao}).Parse()
+		return fmt.Errorf("%w; inner: %v", detail(err), detail(inner))
 	}
 	_, err = pcc.Verify(b64(challenge), rpID, []string{origin}, nil, nil, protocol.TopOriginExplicitVerificationMode, false, uv, true, nil, credParams, protocol.AttestationPolicy{}, protocol.SignaturePolicy{})
 	return err
@@ -341,7 +344,9 @@ func TestNonCanonicalCBORIsRefusedByUsOnly(t *testing.T) {
 	cd, _ := a.registration(t, goodParams("webauthn.create", challenge), id)
 	att := append(make([]byte, 16), 0, 32)
 	att = append(append(att, id...), a.cose...)
-	ad := goodParams("webauthn.create", challenge).authData(att)
+	gp := goodParams("webauthn.create", challenge)
+	gp.flags |= wa.FlagAT
+	ad := gp.authData(att)
 	// Same content, keys in the other order: valid CBOR, not deterministic.
 	m, err := cbor.EncOptions{Sort: cbor.SortNone}.EncMode()
 	if err != nil {
@@ -353,7 +358,7 @@ func TestNonCanonicalCBORIsRefusedByUsOnly(t *testing.T) {
 		Fmt      string         `cbor:"fmt"`
 	}{ad, map[string]any{}, "none"})
 	if err := otherRegistration(challenge, id, cd, ao, true); err != nil {
-		t.Skipf("the independent verifier also refuses this form: %v", err)
+		t.Fatalf("the independent verifier refuses the non-canonical form, so the test proves nothing: %v", err)
 	}
 	if _, err := rp.VerifyRegistration(challenge, cd, ao, wa.Policy{}); err == nil {
 		t.Fatal("ours accepted a non-deterministic attestation object")
