@@ -1,0 +1,4 @@
+go test fuzz v1
+[]byte("{\"type\":\"webauthn.get\",\"challenge\":\"h2qlF7qD_e5l_P_bykyE7q5dVPgEGh_IXJkeW7snMTc\",\"origin\":\"https://example.org\",\"crossOrigin\":true,\"extraData\":\"clientDataJSON may be extended with additional fields in the future, such as this: 92pcTVD0Aby-q4dtmj6efg\"}")
+[]byte("\xbf\xab\xc3t2\x95\x8b\x063`ӭda\xc9\xc4sZ\xe7\xf8\xed\xd4e\x92\xa5\xe0\xf0\x14R\xb2\xe4\xb5\x05\x00\x00\x00\x00")
+[]byte("0F\x02!\x00\xeb\x12\xfc\xf2;\x12vL\x0f\x12.\"7\x1f\xab\x92\u20c7\x9fט\xf3\x8e\xe1\x84\x1c\x95\x1bn@\xe7\x02!\x00\xc7b7\xff\x9d\xb7{<V\xf3\b7ͦ\xa0\x9aϢ\xe9\x15TN`\x9c\a3\xb1\x18@6\xd1\xcf")
