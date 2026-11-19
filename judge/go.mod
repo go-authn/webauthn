@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/fxamacker/cbor/v2 v2.9.4
-	github.com/go-authn/webauthn v0.0.0
+	github.com/go-authn/webauthn v0.1.0
 	github.com/go-webauthn/webauthn v0.18.2
 )
 
