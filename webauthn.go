@@ -323,7 +323,9 @@ func (rp RelyingParty) VerifyAssertion(challenge []byte, c Credential, clientDat
 	if err := key.verify(msg, signature); err != nil { // step 20
 		return Result{}, err
 	}
-	if ad.SignCount != 0 && c.SignCount != 0 && ad.SignCount <= c.SignCount { // step 21
+	// Step 21 and §6.1.1: "If either is non-zero, and the new signCount value is
+	// less than or equal to the stored value, a cloned authenticator may exist".
+	if (ad.SignCount != 0 || c.SignCount != 0) && ad.SignCount <= c.SignCount {
 		return Result{}, fmt.Errorf("%w: %d after %d, the authenticator may be cloned", ErrSignCount, ad.SignCount, c.SignCount)
 	}
 	return Result{SignCount: ad.SignCount, BackupState: ad.BackupState(), UV: ad.UserVerified()}, nil
