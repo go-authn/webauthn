@@ -29,7 +29,7 @@ Each wraps its own sentinel (`errors.Is`): wrong type (`ErrType`), challenge
 (`ErrChallenge`), origin (`ErrOrigin`), rpIdHash (`ErrRPIDHash`); UP clear
 (`ErrUserPresence`); UV clear when required (`ErrUserVerification`); BS without
 BE, or BE different from the registered one (`ErrBackup`); a counter that did not
-advance when both are non-zero (`ErrSignCount`); an unknown algorithm
+advance when either is non-zero (`ErrSignCount`); an unknown algorithm
 (`ErrAlgorithm`); a key off the curve, a weak or malformed key (`ErrKey`);
 non-canonical, overlong, indefinite or deep CBOR (`ErrCBOR`); trailing bytes
 (`ErrTrailingBytes`); a credential ID of 0 or over 1023 bytes (`ErrCredentialID`);

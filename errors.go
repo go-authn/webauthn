@@ -29,7 +29,7 @@ var (
 	ErrUserVerification = errors.New("webauthn: user verification required")
 	// ErrBackup: BS set without BE, or BE differs from the credential's (§6.1.3, §7.2 step 17).
 	ErrBackup = errors.New("webauthn: inconsistent backup flags")
-	// ErrSignCount: the counter did not advance although both are non-zero (§6.1.1, §7.2 step 21).
+	// ErrSignCount: the counter did not advance although either is non-zero (§6.1.1, §7.2 step 21).
 	ErrSignCount = errors.New("webauthn: signature counter regression")
 	// ErrAuthData: authenticator data is malformed (§6.1).
 	ErrAuthData = errors.New("webauthn: invalid authenticator data")

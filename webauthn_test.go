@@ -241,7 +241,7 @@ func TestAssertionRefusals(t *testing.T) {
 		{"counter regressed", stored(cred, 7), getCD, adWith(testRP.ID, flagsOK, 3), nil, Policy{}, ErrSignCount},
 		{"counter advanced", stored(cred, 7), getCD, adWith(testRP.ID, flagsOK, 8), nil, Policy{}, nil},
 		{"counter zero and zero", stored(cred, 0), getCD, adWith(testRP.ID, flagsOK, 0), nil, Policy{}, nil},
-		{"counter stored, new zero", stored(cred, 7), getCD, adWith(testRP.ID, flagsOK, 0), nil, Policy{}, nil},
+		{"counter stored, new zero", stored(cred, 7), getCD, adWith(testRP.ID, flagsOK, 0), nil, Policy{}, ErrSignCount}, // §6.1.1: either non-zero
 		{"counter new, stored zero", stored(cred, 0), getCD, adWith(testRP.ID, flagsOK, 9), nil, Policy{}, nil},
 		{"credential ID too long", bad(cred, func(c *Credential) { c.ID = make([]byte, MaxCredentialIDLength+1) }), getCD, adWith(testRP.ID, flagsOK, 1), nil, Policy{}, ErrCredentialID},
 		{"credential ID empty", bad(cred, func(c *Credential) { c.ID = nil }), getCD, adWith(testRP.ID, flagsOK, 1), nil, Policy{}, ErrCredentialID},
