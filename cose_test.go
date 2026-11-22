@@ -130,8 +130,11 @@ func TestCOSEKeyRefusals(t *testing.T) {
 		})
 	}
 	// Control: the accepted edge cases next to the refused ones.
-	if _, err := parseCOSEKey(okp(AlgEdDSA, 1, 6, okZero)); err != nil {
-		t.Fatalf("y = 1, sign clear, is the identity point and exists: %v", err)
+	if !ed25519OnCurve(okZero) {
+		t.Fatal("y = 1, sign clear, is the identity point and exists")
+	}
+	if _, err := parseCOSEKey(okp(AlgEdDSA, 1, 6, okZero)); !errors.Is(err, ErrKey) {
+		t.Fatalf("the identity point is a point and not a key: %v", err)
 	}
 	if _, err := parseCOSEKey(rsaKey(rsaN(2048, nil), []byte{1, 0, 1})); err != nil {
 		t.Fatalf("2048 bits: %v", err)
