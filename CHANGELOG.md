@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.3.0
+
+- `RelyingParty.VerifyRegistrationAttested` verifies `packed` attestation with
+  an x5c chain (WebAuthn Level 3 section 8.2): the signature under the
+  attestation certificate, the certificate requirements of 8.2.1 (version 3,
+  subject C/O/OU "Authenticator Attestation"/CN, Basic Constraints CA false,
+  non-critical id-fido-gen-ce-aaguid equal to authData's AAGUID). It returns an
+  `Attestation` (type, verified AAGUID, trust path). `none` and self attestation
+  yield no AAGUID.
+- `Attestation.VerifyTrustPath(roots, now)` builds the chain to caller-supplied
+  roots. Trusting a root for an AAGUID stays the caller's decision.
+- `VerifyRegistration` is unchanged: it still refuses a statement with a chain.
+- Fuzz target `FuzzAttestationStatement`, corpus committed.
+
 ## v0.2.0
 
 Security audit 2026-11-21.

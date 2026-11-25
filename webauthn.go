@@ -219,31 +219,38 @@ func (rp RelyingParty) checkAuthData(a *AuthenticatorData, p Policy) error {
 // challenge is the value issued for this ceremony. Attestation is accepted in
 // format "none" (§8.7) and "packed" self attestation (§8.2, no x5c): a
 // statement that carries a certificate chain is refused rather than ignored,
-// because this package does not decide whom to trust (ask the browser for
-// attestation "none"). Step 24, that the credential ID is not already
-// registered, belongs to the caller's store.
+// because this function does not decide whom to trust; use
+// VerifyRegistrationAttested for that. Credential.AAGUID is the
+// authenticator's own claim here. Step 24, that the credential ID is not
+// already registered, belongs to the caller's store.
 func (rp RelyingParty) VerifyRegistration(challenge, clientDataJSON, attestationObject []byte, p Policy) (Credential, error) {
+	c, _, err := rp.verifyRegistration(challenge, clientDataJSON, attestationObject, p, false)
+	return c, err
+}
+
+func (rp RelyingParty) verifyRegistration(challenge, clientDataJSON, attestationObject []byte, p Policy, allowChain bool) (Credential, Attestation, error) {
 	if err := rp.validate(); err != nil {
-		return Credential{}, err
+		return Credential{}, Attestation{}, err
 	}
 	if err := parseClientData(clientDataJSON, "webauthn.create", challenge, rp.Origins); err != nil { // steps 7-10
-		return Credential{}, err
+		return Credential{}, Attestation{}, err
 	}
 	ao, err := ParseAttestationObject(attestationObject) // step 12
 	if err != nil {
-		return Credential{}, err
+		return Credential{}, Attestation{}, err
 	}
 	ad := ao.AuthData
 	if err := rp.checkAuthData(ad, p); err != nil { // steps 13-16
-		return Credential{}, err
+		return Credential{}, Attestation{}, err
 	}
 	key, err := parseCOSEKey(ad.PublicKeyCOSE) // step 17
 	if err != nil {
-		return Credential{}, err
+		return Credential{}, Attestation{}, err
 	}
 	hash := sha256.Sum256(clientDataJSON)                       // step 11
-	if err := verifyAttestation(ao, key, hash[:]); err != nil { // steps 19-21
-		return Credential{}, err
+	att, err := verifyAttestation(ao, key, hash[:], allowChain) // steps 19-21
+	if err != nil {
+		return Credential{}, Attestation{}, err
 	}
 	return Credential{
 		ID:             ad.CredentialID,
@@ -251,36 +258,21 @@ func (rp RelyingParty) VerifyRegistration(challenge, clientDataJSON, attestation
 		SignCount:      ad.SignCount,
 		BackupEligible: ad.BackupEligible(),
 		AAGUID:         ad.AAGUID,
-	}, nil
+	}, att, nil
 }
 
-// verifyAttestation checks the statement for the two accepted formats.
-func verifyAttestation(ao *AttestationObject, key *coseKey, clientDataHash []byte) error {
+// verifyAttestation checks the statement for the accepted formats (§8.2, §8.7).
+func verifyAttestation(ao *AttestationObject, key *coseKey, clientDataHash []byte, allowChain bool) (Attestation, error) {
 	switch ao.Format {
 	case "none": // §8.7
 		if len(ao.attStmt) != 0 {
-			return fmt.Errorf("%w: format none carries a statement (§8.7)", ErrAttestation)
+			return Attestation{}, fmt.Errorf("%w: format none carries a statement (§8.7)", ErrAttestation)
 		}
-		return nil
-	case "packed": // §8.2, the self-attestation case of §8.2.1
-		if len(ao.attStmt) != 2 {
-			return fmt.Errorf("%w: packed statement is not self attestation (only alg and sig, no certificate chain)", ErrAttestation)
-		}
-		alg, okA := lookup[int64](ao.attStmt, "alg")
-		sig, okS := lookup[[]byte](ao.attStmt, "sig")
-		if !okA || !okS {
-			return fmt.Errorf("%w: packed statement lacks a well-typed alg and sig", ErrAttestation)
-		}
-		if alg != key.alg {
-			return fmt.Errorf("%w: packed alg %d is not the credential's %d", ErrAttestation, alg, key.alg)
-		}
-		msg := append(append([]byte(nil), ao.RawAuthData...), clientDataHash...)
-		if err := key.verify(msg, sig); err != nil {
-			return fmt.Errorf("%w: self attestation: %w", ErrAttestation, err)
-		}
-		return nil
+		return Attestation{Format: "none", Type: AttestationNone}, nil
+	case "packed": // §8.2
+		return verifyPacked(ao, key, clientDataHash, allowChain)
 	}
-	return fmt.Errorf("%w: format %q (only none and packed self attestation)", ErrAttestation, ao.Format)
+	return Attestation{}, fmt.Errorf("%w: format %q (only none and packed)", ErrAttestation, ao.Format)
 }
 
 // VerifyAssertion verifies the response to navigator.credentials.get() by
