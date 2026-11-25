@@ -4,8 +4,10 @@ package webauthn
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -203,7 +205,8 @@ func TestPackedChainStatementShapes(t *testing.T) {
 		"element text":  m("alg", AlgES256, "sig", sig, "x5c", []any{"x"}),
 		"garbage cert":  m("alg", AlgES256, "sig", sig, "x5c", []any{[]byte{1, 2, 3}}),
 		"oversize cert": m("alg", AlgES256, "sig", sig, "x5c", []any{make([]byte, maxCertDER+1)}),
-		"extra member":  m("alg", AlgES256, "ecdaaKeyId", []byte{1}, "sig", sig, "x5c", []any{leaf.Raw}),
+		"extra member":  m("alg", AlgES256, "sig", sig, "x5c", []any{leaf.Raw}, "ecdaaKeyId", []byte{1}),
+		"self extra":    m("alg", AlgES256, "sig", sig, "ecdaaKeyId", []byte{1}),
 		"alg vs key":    m("alg", AlgEdDSA, "sig", sig, "x5c", []any{leaf.Raw}),
 		"alg unknown":   m("alg", int64(-35), "sig", sig, "x5c", []any{leaf.Raw}),
 		"sig not bytes": m("alg", AlgES256, "sig", "x", "x5c", []any{leaf.Raw}),
@@ -212,6 +215,58 @@ func TestPackedChainStatementShapes(t *testing.T) {
 		if _, _, err := testRP.VerifyRegistrationAttested(testChall, cd, ao2, Policy{}); !errors.Is(err, ErrAttestation) && !errors.Is(err, ErrAlgorithm) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+func TestTrustPathThroughAnIntermediate(t *testing.T) {
+	root := newTestCA(t, "root")
+	ik, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: "inter"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, root.cert, &ik.PublicKey, root.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ic, _ := x509.ParseCertificate(der)
+	inter := testCA{ic, ik}
+	leaf, key := inter.leaf(t, leafOpts{aaguid: testAAGUID[:], subject: defaultSubject()})
+	cd, ao := packedChain(t, testAAGUID, key, leaf.Raw, ic.Raw)
+	_, att, err := testRP.VerifyRegistrationAttested(testChall, cd, ao, Policy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := att.VerifyTrustPath([]*x509.Certificate{root.cert}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAttestationKeyTypes(t *testing.T) {
+	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, minRSABits)
+	for name, c := range map[string]struct {
+		alg int64
+		pub any
+		ok  bool
+	}{
+		"ed25519":      {AlgEdDSA, edPub, true},
+		"rsa":          {AlgRS256, &rsaKey.PublicKey, true},
+		"rsa vs es256": {AlgES256, &rsaKey.PublicKey, false},
+		"ed vs rsa":    {AlgRS256, edPub, false},
+	} {
+		_, err := attestationKey(c.alg, &x509.Certificate{PublicKey: c.pub})
+		if (err == nil) != c.ok {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestCertificateVersionRefused(t *testing.T) {
+	c := &x509.Certificate{Version: 1}
+	if err := checkAttestationCert(c, testAAGUID); !errors.Is(err, ErrAttestation) {
+		t.Fatal(err)
 	}
 }
 
