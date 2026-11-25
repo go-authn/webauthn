@@ -130,8 +130,8 @@ func verifyPacked(ao *AttestationObject, key *coseKey, clientDataHash []byte, al
 		return att, fmt.Errorf("%w: x5c must be one to %d certificates", ErrAttestation, maxX5C)
 	}
 	for _, e := range list {
-		der, _ := e.([]byte) // an element that is not a byte string leaves der empty
-		if len(der) == 0 || len(der) > maxCertDER {
+		der, _ := e.([]byte) // an element that is not a byte string leaves der empty, which does not parse
+		if len(der) > maxCertDER {
 			return att, fmt.Errorf("%w: x5c holds an element that is not a certificate of at most %d bytes", ErrAttestation, maxCertDER)
 		}
 		c, err := x509.ParseCertificate(der)

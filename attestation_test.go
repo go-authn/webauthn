@@ -251,6 +251,24 @@ func TestTrustPathThroughAnIntermediate(t *testing.T) {
 	}
 }
 
+func TestPackedStatementNeedsAlgAndSig(t *testing.T) {
+	root := newTestCA(t, "root")
+	leaf, key := root.leaf(t, leafOpts{aaguid: testAAGUID[:], subject: defaultSubject()})
+	cd, ao := packedChain(t, testAAGUID, key, leaf.Raw)
+	parsed, _ := ParseAttestationObject(ao)
+	sig, _ := lookup[[]byte](parsed.attStmt, "sig")
+	for name, stmt := range map[string]cborMap{
+		"no alg":   m("sig", sig, "x5c", []any{leaf.Raw}),
+		"alg text": m("alg", "x", "sig", sig, "x5c", []any{leaf.Raw}),
+		"no sig":   m("alg", AlgES256, "x5c", []any{leaf.Raw}),
+	} {
+		_, _, err := testRP.VerifyRegistrationAttested(testChall, cd, attObj("packed", stmt, parsed.RawAuthData), Policy{})
+		if err == nil || !strings.Contains(err.Error(), "well-typed alg and sig") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestAttestationKeyTypes(t *testing.T) {
 	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, minRSABits)
