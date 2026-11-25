@@ -51,6 +51,7 @@ type leafOpts struct {
 	subject  pkix.Name
 	isCA     bool
 	noBC     bool
+	pad      int // bytes of an unrelated extension, to make the certificate large
 }
 
 func defaultSubject() pkix.Name {
@@ -68,6 +69,10 @@ func (ca testCA) leaf(t testing.TB, o leafOpts) (*x509.Certificate, *ecdsa.Priva
 	if o.aaguid != nil {
 		v, _ := asn1.Marshal(o.aaguid)
 		tpl.ExtraExtensions = []pkix.Extension{{Id: oidFIDOGenCEAAGUID, Critical: o.critical, Value: v}}
+	}
+	if o.pad > 0 {
+		v, _ := asn1.Marshal(make([]byte, o.pad))
+		tpl.ExtraExtensions = append(tpl.ExtraExtensions, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1}, Value: v})
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, ca.cert, &k.PublicKey, ca.key)
 	if err != nil {
@@ -248,6 +253,18 @@ func TestTrustPathThroughAnIntermediate(t *testing.T) {
 	}
 	if err := att.VerifyTrustPath([]*x509.Certificate{root.cert}, time.Now()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAValidButOversizeCertificateIsRefused(t *testing.T) {
+	root := newTestCA(t, "root")
+	for pad, ok := range map[int]bool{maxCertDER - 1000: true, maxCertDER: false} {
+		leaf, key := root.leaf(t, leafOpts{aaguid: testAAGUID[:], subject: defaultSubject(), pad: pad})
+		cd, ao := packedChain(t, testAAGUID, key, leaf.Raw)
+		_, _, err := testRP.VerifyRegistrationAttested(testChall, cd, ao, Policy{})
+		if (err == nil) != ok || (err != nil && !strings.Contains(err.Error(), "at most")) {
+			t.Errorf("pad %d (%d bytes): %v", pad, len(leaf.Raw), err)
+		}
 	}
 }
 
