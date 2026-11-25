@@ -36,6 +36,17 @@ var (
 	// ErrAttestation: an attestation object that is malformed or whose format
 	// or statement this library does not accept (§6.5, §8.2, §8.7).
 	ErrAttestation = errors.New("webauthn: attestation refused")
+	// ErrAAGUIDExtensionMissing: Policy.RequireAAGUIDExtension is set and the
+	// attestation certificate has no id-fido-gen-ce-aaguid (§8.2.1). Like the
+	// two below it also matches ErrAttestation.
+	ErrAAGUIDExtensionMissing = errors.New("webauthn: id-fido-gen-ce-aaguid missing")
+	// ErrAAGUIDExtensionMalformed: id-fido-gen-ce-aaguid is critical or is not
+	// the DER of a 16-byte OCTET STRING (§8.2.1). Raised whenever the extension
+	// is present, required or not.
+	ErrAAGUIDExtensionMalformed = errors.New("webauthn: id-fido-gen-ce-aaguid malformed")
+	// ErrAAGUIDExtensionMismatch: id-fido-gen-ce-aaguid differs from authData's
+	// AAGUID (§8.2 step 2). Raised whenever the extension is present.
+	ErrAAGUIDExtensionMismatch = errors.New("webauthn: id-fido-gen-ce-aaguid mismatch")
 	// ErrCredentialID: empty or longer than 1023 bytes (§6.3).
 	ErrCredentialID = errors.New("webauthn: invalid credential ID")
 	// ErrAlgorithm: a COSE algorithm other than ES256, EdDSA or RS256 (RFC 9053).
