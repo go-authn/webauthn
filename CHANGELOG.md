@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.0
+
+- `Policy.RequireAAGUIDExtension` (default false, behaviour unchanged): makes
+  `VerifyRegistrationAttested` refuse an attestation certificate that lacks
+  id-fido-gen-ce-aaguid (WebAuthn Level 3 section 8.2.1). Three new sentinels,
+  each also matching `ErrAttestation`: `ErrAAGUIDExtensionMissing`,
+  `ErrAAGUIDExtensionMalformed` (critical, or not a 16-byte OCTET STRING) and
+  `ErrAAGUIDExtensionMismatch` (differs from authData). Malformed and Mismatch
+  are also raised when the extension is present without the option; the error
+  texts are unchanged. New fuzz target `FuzzAAGUIDExtension`.
+
 ## v0.3.0
 
 - `RelyingParty.VerifyRegistrationAttested` verifies `packed` attestation with

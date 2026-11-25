@@ -3,6 +3,7 @@
 package webauthn
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -51,7 +52,8 @@ type leafOpts struct {
 	subject  pkix.Name
 	isCA     bool
 	noBC     bool
-	pad      int // bytes of an unrelated extension, to make the certificate large
+	pad      int    // bytes of an unrelated extension, to make the certificate large
+	rawExt   []byte // when set, the aaguid extension's value verbatim (not re-wrapped as an OCTET STRING)
 }
 
 func defaultSubject() pkix.Name {
@@ -68,6 +70,9 @@ func (ca testCA) leaf(t testing.TB, o leafOpts) (*x509.Certificate, *ecdsa.Priva
 	}
 	if o.aaguid != nil {
 		v, _ := asn1.Marshal(o.aaguid)
+		if o.rawExt != nil {
+			v = o.rawExt
+		}
 		tpl.ExtraExtensions = []pkix.Extension{{Id: oidFIDOGenCEAAGUID, Critical: o.critical, Value: v}}
 	}
 	if o.pad > 0 {
@@ -308,7 +313,7 @@ func TestAttestationKeyTypes(t *testing.T) {
 
 func TestCertificateVersionRefused(t *testing.T) {
 	c := &x509.Certificate{Version: 1}
-	if err := checkAttestationCert(c, testAAGUID); err == nil || !strings.Contains(err.Error(), "version") {
+	if err := checkAttestationCert(c, testAAGUID, false); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatal(err)
 	}
 }
@@ -329,11 +334,99 @@ func TestAAGUIDExtensionEncodings(t *testing.T) {
 			Version: 3, Subject: s, BasicConstraintsValid: true,
 			Extensions: []pkix.Extension{{Id: oidFIDOGenCEAAGUID, Value: c.val}},
 		}
-		err := checkAttestationCert(cert, testAAGUID)
-		if (err == nil) != c.ok || (err != nil && !strings.Contains(err.Error(), "16-byte OCTET STRING")) {
-			t.Errorf("%s: %v", name, err)
+		for _, req := range []bool{false, true} {
+			err := checkAttestationCert(cert, testAAGUID, req)
+			if (err == nil) != c.ok || (err != nil && !strings.Contains(err.Error(), "16-byte OCTET STRING")) {
+				t.Errorf("%s (require=%v): %v", name, req, err)
+			}
 		}
 	}
+
+	// The refusal text is v0.3.0's, byte for byte.
+	cert := &x509.Certificate{Version: 3, Subject: s, BasicConstraintsValid: true,
+		Extensions: []pkix.Extension{{Id: oidFIDOGenCEAAGUID, Critical: true, Value: good}}}
+	if err := checkAttestationCert(cert, testAAGUID, false); err == nil || err.Error() != "webauthn: attestation refused: id-fido-gen-ce-aaguid is marked critical (§8.2.1)" {
+		t.Errorf("%v", err)
+	}
+}
+
+// TestRequireAAGUIDExtension runs every extension shape through the full
+// ceremony with Policy.RequireAAGUIDExtension off and on: off keeps v0.3.0
+// (only a PRESENT bad extension fails), on also refuses an absent one.
+func TestRequireAAGUIDExtension(t *testing.T) {
+	root := newTestCA(t, "root")
+	wrong := append([]byte(nil), testAAGUID[:]...)
+	wrong[0] ^= 0xff
+	notOctet, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagUTF8String, Bytes: testAAGUID[:]})
+	for name, c := range map[string]struct {
+		o       leafOpts
+		raw     []byte // replaces the extension value when set
+		wantOff error  // nil = accepted
+		wantOn  error
+	}{
+		"absent":    {leafOpts{subject: defaultSubject()}, nil, nil, ErrAAGUIDExtensionMissing},
+		"equal":     {leafOpts{aaguid: testAAGUID[:], subject: defaultSubject()}, nil, nil, nil},
+		"mismatch":  {leafOpts{aaguid: wrong, subject: defaultSubject()}, nil, ErrAAGUIDExtensionMismatch, ErrAAGUIDExtensionMismatch},
+		"short":     {leafOpts{aaguid: testAAGUID[:15], subject: defaultSubject()}, nil, ErrAAGUIDExtensionMalformed, ErrAAGUIDExtensionMalformed},
+		"long":      {leafOpts{aaguid: append(append([]byte(nil), testAAGUID[:]...), 0), subject: defaultSubject()}, nil, ErrAAGUIDExtensionMalformed, ErrAAGUIDExtensionMalformed},
+		"critical":  {leafOpts{aaguid: testAAGUID[:], critical: true, subject: defaultSubject()}, nil, ErrAAGUIDExtensionMalformed, ErrAAGUIDExtensionMalformed},
+		"not octet": {leafOpts{aaguid: testAAGUID[:], subject: defaultSubject()}, notOctet, ErrAAGUIDExtensionMalformed, ErrAAGUIDExtensionMalformed},
+	} {
+		c.o.rawExt = c.raw
+		cert, key := root.leaf(t, c.o)
+		cd, ao := packedChain(t, testAAGUID, key, cert.Raw)
+		for _, on := range []bool{false, true} {
+			want := c.wantOff
+			if on {
+				want = c.wantOn
+			}
+			_, att, err := testRP.VerifyRegistrationAttested(testChall, cd, ao, Policy{RequireAAGUIDExtension: on})
+			switch {
+			case want == nil && (err != nil || att.AAGUID != testAAGUID):
+				t.Errorf("%s on=%v: %v", name, on, err)
+			case want != nil && (!errors.Is(err, want) || !errors.Is(err, ErrAttestation)):
+				t.Errorf("%s on=%v: got %v, want %v", name, on, err, want)
+			case want != nil && att.AAGUID != ([16]byte{}):
+				t.Errorf("%s on=%v: AAGUID leaked on refusal", name, on)
+			}
+			if want != nil {
+				for _, other := range []error{ErrAAGUIDExtensionMissing, ErrAAGUIDExtensionMalformed, ErrAAGUIDExtensionMismatch} {
+					if other != want && errors.Is(err, other) {
+						t.Errorf("%s on=%v: also matches %v", name, on, other)
+					}
+				}
+			}
+		}
+	}
+}
+
+func FuzzAAGUIDExtension(f *testing.F) {
+	good, _ := asn1.Marshal(testAAGUID[:])
+	f.Add(good, false)
+	f.Add(good, true)
+	f.Add([]byte{4, 16}, false)
+	f.Add([]byte{}, false)
+	f.Add(append(append([]byte(nil), good...), 0), false)
+	f.Fuzz(func(t *testing.T, val []byte, critical bool) {
+		c := &x509.Certificate{Extensions: []pkix.Extension{{Id: oidFIDOGenCEAAGUID, Critical: critical, Value: val}}}
+		got, found, err := aaguidExtension(c)
+		if !found {
+			t.Fatal("present extension reported absent")
+		}
+		if err != nil {
+			if !errors.Is(err, ErrAAGUIDExtensionMalformed) || !errors.Is(err, ErrAttestation) || got != nil {
+				t.Fatalf("%v %x", err, got)
+			}
+			return
+		}
+		if critical || len(got) != 16 {
+			t.Fatalf("accepted critical=%v len=%d", critical, len(got))
+		}
+		again, _ := asn1.Marshal(got)
+		if !bytes.Equal(again, val) { // accepted means val IS the canonical DER of those 16 bytes
+			t.Fatalf("non-canonical value accepted: %x", val)
+		}
+	})
 }
 
 func TestSelfAndNoneYieldNoAAGUID(t *testing.T) {
@@ -350,6 +443,10 @@ func TestSelfAndNoneYieldNoAAGUID(t *testing.T) {
 		t.Errorf("a validly signed self attestation with an extra member: %v", err)
 	}
 	for name, ao := range map[string][]byte{"self": self, "none": attObj("none", m(), ad)} {
+		// RequireAAGUIDExtension concerns certificates only: self and none ignore it.
+		if _, _, err := testRP.VerifyRegistrationAttested(testChall, cd, ao, Policy{RequireAAGUIDExtension: true}); err != nil {
+			t.Fatalf("%s with RequireAAGUIDExtension: %v", name, err)
+		}
 		cred, got, err := testRP.VerifyRegistrationAttested(testChall, cd, ao, Policy{})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

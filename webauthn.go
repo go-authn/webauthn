@@ -52,6 +52,17 @@ type RelyingParty struct {
 type Policy struct {
 	// RequireUV demands the user-verified flag (§7.1 step 15, §7.2 step 16).
 	RequireUV bool
+	// RequireAAGUIDExtension makes VerifyRegistrationAttested refuse a packed
+	// x5c statement whose attestation certificate lacks the
+	// id-fido-gen-ce-aaguid extension (OID 1.3.6.1.4.1.45724.1.1.4). WebAuthn
+	// L3 §8.2.1 says the extension is checked only "if present"; this switch
+	// demands it. When set, the leaf must carry it, non-critical, as an
+	// OCTET STRING of exactly 16 bytes equal to authData's AAGUID, else the
+	// error matches ErrAAGUIDExtensionMissing, ErrAAGUIDExtensionMalformed or
+	// ErrAAGUIDExtensionMismatch (and ErrAttestation). Default false keeps the
+	// "if present" behaviour. Self and none attestation carry no certificate
+	// and are unaffected; VerifyRegistration never reads this field.
+	RequireAAGUIDExtension bool
 }
 
 // Credential is what the relying party stores per passkey.
@@ -247,8 +258,8 @@ func (rp RelyingParty) verifyRegistration(challenge, clientDataJSON, attestation
 	if err != nil {
 		return Credential{}, Attestation{}, err
 	}
-	hash := sha256.Sum256(clientDataJSON)                       // step 11
-	att, err := verifyAttestation(ao, key, hash[:], allowChain) // steps 19-21
+	hash := sha256.Sum256(clientDataJSON)                                                 // step 11
+	att, err := verifyAttestation(ao, key, hash[:], allowChain, p.RequireAAGUIDExtension) // steps 19-21
 	if err != nil {
 		return Credential{}, Attestation{}, err
 	}
@@ -262,7 +273,7 @@ func (rp RelyingParty) verifyRegistration(challenge, clientDataJSON, attestation
 }
 
 // verifyAttestation checks the statement for the accepted formats (§8.2, §8.7).
-func verifyAttestation(ao *AttestationObject, key *coseKey, clientDataHash []byte, allowChain bool) (Attestation, error) {
+func verifyAttestation(ao *AttestationObject, key *coseKey, clientDataHash []byte, allowChain, requireAAGUID bool) (Attestation, error) {
 	switch ao.Format {
 	case "none": // §8.7
 		if len(ao.attStmt) != 0 {
@@ -270,7 +281,7 @@ func verifyAttestation(ao *AttestationObject, key *coseKey, clientDataHash []byt
 		}
 		return Attestation{Format: "none", Type: AttestationNone}, nil
 	case "packed": // §8.2
-		return verifyPacked(ao, key, clientDataHash, allowChain)
+		return verifyPacked(ao, key, clientDataHash, allowChain, requireAAGUID)
 	}
 	return Attestation{}, fmt.Errorf("%w: format %q (only none and packed)", ErrAttestation, ao.Format)
 }

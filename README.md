@@ -25,6 +25,11 @@ res, err := rp.VerifyAssertion(ch, cred, clientDataJSON, authenticatorData, sign
   `Attestation.VerifyTrustPath(roots, now)` then checks the chain against the roots
   the caller took from its metadata (FIDO MDS3). Self attestation and none yield NO
   trusted AAGUID. Other formats (tpm, android-key, apple, fido-u2f) are refused.
+  The id-fido-gen-ce-aaguid extension is checked only when present (8.2.1);
+  `Policy{RequireAAGUIDExtension: true}` demands it (non-critical, an OCTET STRING of
+  16 bytes, equal to authData's AAGUID), and a refusal matches
+  `ErrAAGUIDExtensionMissing`, `ErrAAGUIDExtensionMalformed` or
+  `ErrAAGUIDExtensionMismatch` as well as `ErrAttestation`. Off by default.
 - Spec: W3C Web Authentication Level 3 sections 7.1, 7.2, 6.1, 6.5.1, 8.2, 8.7,
   13.4.3; RFC 9052/9053 (COSE), RFC 8949 section 4.2 (deterministic CBOR).
 

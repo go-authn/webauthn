@@ -97,7 +97,7 @@ func (rp RelyingParty) VerifyRegistrationAttested(challenge, clientDataJSON, att
 }
 
 // verifyPacked is the §8.2 verification procedure for both branches.
-func verifyPacked(ao *AttestationObject, key *coseKey, clientDataHash []byte, allowChain bool) (Attestation, error) {
+func verifyPacked(ao *AttestationObject, key *coseKey, clientDataHash []byte, allowChain, requireAAGUID bool) (Attestation, error) {
 	att := Attestation{Format: "packed"}
 	alg, okA := lookup[int64](ao.attStmt, "alg")
 	sig, okS := lookup[[]byte](ao.attStmt, "sig")
@@ -148,7 +148,7 @@ func verifyPacked(ao *AttestationObject, key *coseKey, clientDataHash []byte, al
 	if err := attKey.verify(msg, sig); err != nil { // step 2, first bullet
 		return att, fmt.Errorf("%w: attestation signature: %w", ErrAttestation, err)
 	}
-	if err := checkAttestationCert(leaf, ao.AuthData.AAGUID); err != nil { // §8.2.1, and the aaguid bullet
+	if err := checkAttestationCert(leaf, ao.AuthData.AAGUID, requireAAGUID); err != nil { // §8.2.1, and the aaguid bullet
 		return att, err
 	}
 	att.Type = AttestationBasic
@@ -176,9 +176,40 @@ func attestationKey(alg int64, leaf *x509.Certificate) (*coseKey, error) {
 	return nil, fmt.Errorf("%w: alg %d does not fit the attestation certificate's key (%T)", ErrAlgorithm, alg, leaf.PublicKey)
 }
 
+// aaguidError is an id-fido-gen-ce-aaguid refusal: it keeps its message and
+// matches both ErrAttestation and its own sentinel under errors.Is.
+type aaguidError struct {
+	kind error
+	msg  string
+}
+
+func (e *aaguidError) Error() string   { return e.msg }
+func (e *aaguidError) Unwrap() []error { return []error{ErrAttestation, e.kind} }
+
+// aaguidExtension finds id-fido-gen-ce-aaguid (§8.2.1) in c and returns its
+// 16 bytes. found is false when the certificate does not carry it; a
+// critical, mis-encoded or not-16-byte extension is ErrAAGUIDExtensionMalformed.
+func aaguidExtension(c *x509.Certificate) (aaguid []byte, found bool, err error) {
+	for _, e := range c.Extensions {
+		if !e.Id.Equal(oidFIDOGenCEAAGUID) {
+			continue
+		}
+		if e.Critical {
+			return nil, true, &aaguidError{ErrAAGUIDExtensionMalformed, fmt.Sprintf("%v: id-fido-gen-ce-aaguid is marked critical (§8.2.1)", ErrAttestation)}
+		}
+		var got []byte                                                                  // the extension value is the DER of an OCTET STRING
+		if rest, _ := asn1.Unmarshal(e.Value, &got); len(rest) != 0 || len(got) != 16 { // unparsable leaves got empty
+			return nil, true, &aaguidError{ErrAAGUIDExtensionMalformed, fmt.Sprintf("%v: id-fido-gen-ce-aaguid is not a 16-byte OCTET STRING (§8.2.1)", ErrAttestation)}
+		}
+		return got, true, nil
+	}
+	return nil, false, nil
+}
+
 // checkAttestationCert applies §8.2.1 to the attestation certificate and,
 // from §8.2 step 2, compares id-fido-gen-ce-aaguid with authData's AAGUID.
-func checkAttestationCert(c *x509.Certificate, aaguid [16]byte) error {
+// The extension is optional ("if present") unless require is set.
+func checkAttestationCert(c *x509.Certificate, aaguid [16]byte, require bool) error {
 	if c.Version != 3 {
 		return fmt.Errorf("%w: attestation certificate is version %d, §8.2.1 requires 3", ErrAttestation, c.Version)
 	}
@@ -190,20 +221,18 @@ func checkAttestationCert(c *x509.Certificate, aaguid [16]byte) error {
 	if !c.BasicConstraintsValid || c.IsCA {
 		return fmt.Errorf("%w: attestation certificate must carry Basic Constraints with CA false (§8.2.1)", ErrAttestation)
 	}
-	for _, e := range c.Extensions {
-		if !e.Id.Equal(oidFIDOGenCEAAGUID) {
-			continue
+	got, found, err := aaguidExtension(c)
+	if err != nil {
+		return err
+	}
+	if !found {
+		if require {
+			return &aaguidError{ErrAAGUIDExtensionMissing, fmt.Sprintf("%v: attestation certificate lacks id-fido-gen-ce-aaguid, which Policy.RequireAAGUIDExtension demands (§8.2.1)", ErrAttestation)}
 		}
-		if e.Critical {
-			return fmt.Errorf("%w: id-fido-gen-ce-aaguid is marked critical (§8.2.1)", ErrAttestation)
-		}
-		var got []byte                                                                  // the extension value is the DER of an OCTET STRING
-		if rest, _ := asn1.Unmarshal(e.Value, &got); len(rest) != 0 || len(got) != 16 { // unparsable leaves got empty
-			return fmt.Errorf("%w: id-fido-gen-ce-aaguid is not a 16-byte OCTET STRING (§8.2.1)", ErrAttestation)
-		}
-		if !bytes.Equal(got, aaguid[:]) {
-			return fmt.Errorf("%w: certificate AAGUID %x differs from authData AAGUID %x (§8.2 step 2)", ErrAttestation, got, aaguid[:])
-		}
+		return nil
+	}
+	if !bytes.Equal(got, aaguid[:]) {
+		return &aaguidError{ErrAAGUIDExtensionMismatch, fmt.Sprintf("%v: certificate AAGUID %x differs from authData AAGUID %x (§8.2 step 2)", ErrAttestation, got, aaguid[:])}
 	}
 	return nil
 }
