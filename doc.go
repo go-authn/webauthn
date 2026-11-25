@@ -30,7 +30,8 @@
 // unknown algorithm, a key off its curve or an RSA key under 2048 bits; any
 // non-deterministic, overlong, indefinite-length or deeply nested CBOR; bytes
 // after a structure; a credential ID of 0 or more than 1023 bytes;
-// crossOrigin and topOrigin ceremonies; and any attestation other than "none"
-// or packed self attestation. Attestation chains are not trusted: ask the
-// browser for attestation "none".
+// crossOrigin and topOrigin ceremonies; and any attestation format other than
+// "none" and "packed". VerifyRegistration refuses a packed statement with a
+// certificate chain; VerifyRegistrationAttested verifies it (8.2, 8.2.1) and
+// Attestation.VerifyTrustPath checks the chain against the caller's roots.
 package webauthn

@@ -17,9 +17,14 @@ res, err := rp.VerifyAssertion(ch, cred, clientDataJSON, authenticatorData, sign
 ```
 
 - Algorithms: ES256 (-7), EdDSA / Ed25519 (-8), RS256 (-257, 2048 bits or more).
-- Attestation: `none` (section 8.7) and `packed` self attestation (8.2). A statement
-  with a certificate chain is refused, not ignored: this package does not decide
-  whom to trust. Ask the browser for attestation `"none"`.
+- Attestation: `none` (section 8.7) and `packed` (8.2) in both forms. `VerifyRegistration`
+  accepts none and self attestation and refuses a statement with a certificate chain.
+  `VerifyRegistrationAttested` also verifies the x5c signature and the attestation
+  certificate requirements (8.2.1, including id-fido-gen-ce-aaguid against authData)
+  and returns an `Attestation` with the AAGUID and the trust path;
+  `Attestation.VerifyTrustPath(roots, now)` then checks the chain against the roots
+  the caller took from its metadata (FIDO MDS3). Self attestation and none yield NO
+  trusted AAGUID. Other formats (tpm, android-key, apple, fido-u2f) are refused.
 - Spec: W3C Web Authentication Level 3 sections 7.1, 7.2, 6.1, 6.5.1, 8.2, 8.7,
   13.4.3; RFC 9052/9053 (COSE), RFC 8949 section 4.2 (deterministic CBOR).
 
