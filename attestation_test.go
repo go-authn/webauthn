@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,6 +138,9 @@ func TestTrustPathRefusals(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	if err := att.VerifyTrustPath(nil, time.Now()); err == nil || !strings.Contains(err.Error(), "no trust anchors") {
+		t.Errorf("no roots must be refused as such: %v", err)
+	}
 	if err := att.VerifyTrustPath([]*x509.Certificate{root.cert}, time.Now().Add(100*24*time.Hour)); !errors.Is(err, ErrAttestation) {
 		t.Errorf("expired: %v", err)
 	}
@@ -206,6 +210,10 @@ func TestPackedChainStatementShapes(t *testing.T) {
 		"garbage cert":  m("alg", AlgES256, "sig", sig, "x5c", []any{[]byte{1, 2, 3}}),
 		"oversize cert": m("alg", AlgES256, "sig", sig, "x5c", []any{make([]byte, maxCertDER+1)}),
 		"extra member":  m("alg", AlgES256, "sig", sig, "x5c", []any{leaf.Raw}, "ecdaaKeyId", []byte{1}),
+		"no alg":        m("sig", sig, "x5c", []any{leaf.Raw}),
+		"alg text":      m("alg", "x", "sig", sig, "x5c", []any{leaf.Raw}),
+		"no sig":        m("alg", AlgES256, "x5c", []any{leaf.Raw}),
+		"empty element": m("alg", AlgES256, "sig", sig, "x5c", []any{[]byte{}}),
 		"self extra":    m("alg", AlgES256, "sig", sig, "ecdaaKeyId", []byte{1}),
 		"alg vs key":    m("alg", AlgEdDSA, "sig", sig, "x5c", []any{leaf.Raw}),
 		"alg unknown":   m("alg", int64(-35), "sig", sig, "x5c", []any{leaf.Raw}),
@@ -265,8 +273,31 @@ func TestAttestationKeyTypes(t *testing.T) {
 
 func TestCertificateVersionRefused(t *testing.T) {
 	c := &x509.Certificate{Version: 1}
-	if err := checkAttestationCert(c, testAAGUID); !errors.Is(err, ErrAttestation) {
+	if err := checkAttestationCert(c, testAAGUID); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatal(err)
+	}
+}
+
+func TestAAGUIDExtensionEncodings(t *testing.T) {
+	good, _ := asn1.Marshal(testAAGUID[:])
+	s := defaultSubject()
+	for name, c := range map[string]struct {
+		val []byte
+		ok  bool
+	}{
+		"exact":          {good, true},
+		"garbage":        {[]byte{1, 2}, false},
+		"trailing bytes": {append(append([]byte(nil), good...), 0), false},
+		"empty":          {nil, false},
+	} {
+		cert := &x509.Certificate{
+			Version: 3, Subject: s, BasicConstraintsValid: true,
+			Extensions: []pkix.Extension{{Id: oidFIDOGenCEAAGUID, Value: c.val}},
+		}
+		err := checkAttestationCert(cert, testAAGUID)
+		if (err == nil) != c.ok || (err != nil && !strings.Contains(err.Error(), "16-byte OCTET STRING")) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 
@@ -278,6 +309,11 @@ func TestSelfAndNoneYieldNoAAGUID(t *testing.T) {
 	ad := authData(testRP.ID, flagsAT, 0, att)
 	h := sha256.Sum256(cd)
 	self := attObj("packed", m("alg", AlgES256, "sig", a.sign(append(append([]byte(nil), ad...), h[:]...))), ad)
+	selfSig := a.sign(append(append([]byte(nil), ad...), h[:]...))
+	extra := attObj("packed", m("alg", AlgES256, "sig", selfSig, "ecdaaKeyId", []byte{1}), ad)
+	if _, _, err := testRP.VerifyRegistrationAttested(testChall, cd, extra, Policy{}); err == nil || !strings.Contains(err.Error(), "not self attestation") {
+		t.Errorf("a validly signed self attestation with an extra member: %v", err)
+	}
 	for name, ao := range map[string][]byte{"self": self, "none": attObj("none", m(), ad)} {
 		cred, got, err := testRP.VerifyRegistrationAttested(testChall, cd, ao, Policy{})
 		if err != nil {

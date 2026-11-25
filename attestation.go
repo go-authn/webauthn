@@ -130,8 +130,8 @@ func verifyPacked(ao *AttestationObject, key *coseKey, clientDataHash []byte, al
 		return att, fmt.Errorf("%w: x5c must be one to %d certificates", ErrAttestation, maxX5C)
 	}
 	for _, e := range list {
-		der, ok := e.([]byte)
-		if !ok || len(der) == 0 || len(der) > maxCertDER {
+		der, _ := e.([]byte) // an element that is not a byte string leaves der empty
+		if len(der) == 0 || len(der) > maxCertDER {
 			return att, fmt.Errorf("%w: x5c holds an element that is not a certificate of at most %d bytes", ErrAttestation, maxCertDER)
 		}
 		c, err := x509.ParseCertificate(der)
@@ -197,8 +197,8 @@ func checkAttestationCert(c *x509.Certificate, aaguid [16]byte) error {
 		if e.Critical {
 			return fmt.Errorf("%w: id-fido-gen-ce-aaguid is marked critical (§8.2.1)", ErrAttestation)
 		}
-		var got []byte // the extension value is the DER of an OCTET STRING
-		if rest, err := asn1.Unmarshal(e.Value, &got); err != nil || len(rest) != 0 || len(got) != 16 {
+		var got []byte                                                                  // the extension value is the DER of an OCTET STRING
+		if rest, _ := asn1.Unmarshal(e.Value, &got); len(rest) != 0 || len(got) != 16 { // unparsable leaves got empty
 			return fmt.Errorf("%w: id-fido-gen-ce-aaguid is not a 16-byte OCTET STRING (§8.2.1)", ErrAttestation)
 		}
 		if !bytes.Equal(got, aaguid[:]) {
