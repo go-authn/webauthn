@@ -82,13 +82,21 @@ type Result struct {
 	UV          bool
 }
 
+// validateRPID checks that id is a bare lower-case host name.
+func validateRPID(id string) error {
+	if id == "" || len(id) > 253 || id != strings.ToLower(id) || strings.ContainsAny(id, "/:@?# \t") {
+		return fmt.Errorf("%w: RP ID %q must be a bare lower-case host name", ErrConfig, id)
+	}
+	return nil
+}
+
 // validate checks the relying party's configuration: the ID is a bare lower
 // case host name and every origin is an exact https origin (http only for
 // localhost) at or below it.
 func (rp RelyingParty) validate() error {
 	id := rp.ID
-	if id == "" || len(id) > 253 || id != strings.ToLower(id) || strings.ContainsAny(id, "/:@?# \t") {
-		return fmt.Errorf("%w: RP ID %q must be a bare lower-case host name", ErrConfig, id)
+	if err := validateRPID(id); err != nil {
+		return err
 	}
 	if len(rp.Origins) == 0 {
 		return fmt.Errorf("%w: no origins", ErrConfig)
@@ -209,7 +217,11 @@ func parseClientData(raw []byte, wantType string, challenge []byte, origins []st
 
 // checkAuthData applies the flag and rpIdHash rules both ceremonies share.
 func (rp RelyingParty) checkAuthData(a *AuthenticatorData, p Policy) error {
-	if a.RPIDHash != sha256.Sum256([]byte(rp.ID)) {
+	return checkAuthData(rp.ID, a, p)
+}
+
+func checkAuthData(rpID string, a *AuthenticatorData, p Policy) error {
+	if a.RPIDHash != sha256.Sum256([]byte(rpID)) {
 		return ErrRPIDHash
 	}
 	if !a.UserPresent() {
@@ -250,16 +262,61 @@ func (rp RelyingParty) verifyRegistration(challenge, clientDataJSON, attestation
 	if err != nil {
 		return Credential{}, Attestation{}, err
 	}
+	hash := sha256.Sum256(clientDataJSON) // step 11
+	return verifyStatement(rp.ID, ao, hash, p, allowChain)
+}
+
+// VerifyAttestationStatement is the part of registration that does not depend
+// on a browser: for a CTAP2-native relying party that signs its own
+// clientDataHash and carries fmt, authData and attStmt as separate fields.
+// VerifyRegistrationAttested is this function behind the clientDataJSON checks
+// (type, origin, challenge) and sha256(clientDataJSON).
+//
+// It parses authData (attested credential data required), checks that its
+// rpIdHash is sha256(rpID), the flags as Policy says (UP; UV when RequireUV;
+// BS needs BE), verifies attStmt for format (none or packed, self or x5c, with
+// the certificate rules of §8.2.1 and Policy.RequireAAGUIDExtension) as a
+// signature over authData || clientDataHash, and returns the credential to
+// store and the Attestation whose VerifyTrustPath the caller still calls.
+// attStmt is the CBOR-encoded statement map (deterministic encoding, as the
+// package's decoder requires).
+//
+// The caller owns freshness: clientDataHash must commit to a single-use
+// challenge the caller issued and now consumes, and nothing here can tell a
+// replayed hash from a fresh one. It also owns the credential-ID uniqueness
+// check. rpID is validated like RelyingParty.ID.
+func VerifyAttestationStatement(rpID, format string, authData, attStmt []byte, clientDataHash [32]byte, p Policy) (Credential, Attestation, error) {
+	if err := validateRPID(rpID); err != nil {
+		return Credential{}, Attestation{}, err
+	}
+	v, err := decodeCBORExact(attStmt)
+	if err != nil {
+		return Credential{}, Attestation{}, fmt.Errorf("%w: attStmt: %w", ErrAttestation, err)
+	}
+	stmt, ok := v.(cborMap)
+	if !ok {
+		return Credential{}, Attestation{}, fmt.Errorf("%w: attStmt must be a CBOR map", ErrAttestation)
+	}
+	ad, err := ParseAuthenticatorData(authData, true)
+	if err != nil {
+		return Credential{}, Attestation{}, err
+	}
+	ao := &AttestationObject{Format: format, AuthData: ad, RawAuthData: authData, attStmt: stmt}
+	return verifyStatement(rpID, ao, clientDataHash, p, true)
+}
+
+// verifyStatement is steps 13-21 of §7.1: the one implementation behind both
+// entry points.
+func verifyStatement(rpID string, ao *AttestationObject, clientDataHash [32]byte, p Policy, allowChain bool) (Credential, Attestation, error) {
 	ad := ao.AuthData
-	if err := rp.checkAuthData(ad, p); err != nil { // steps 13-16
+	if err := checkAuthData(rpID, ad, p); err != nil { // steps 13-16
 		return Credential{}, Attestation{}, err
 	}
 	key, err := parseCOSEKey(ad.PublicKeyCOSE) // step 17
 	if err != nil {
 		return Credential{}, Attestation{}, err
 	}
-	hash := sha256.Sum256(clientDataJSON)                                                 // step 11
-	att, err := verifyAttestation(ao, key, hash[:], allowChain, p.RequireAAGUIDExtension) // steps 19-21
+	att, err := verifyAttestation(ao, key, clientDataHash[:], allowChain, p.RequireAAGUIDExtension) // steps 19-21
 	if err != nil {
 		return Credential{}, Attestation{}, err
 	}
