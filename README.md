@@ -30,6 +30,14 @@ res, err := rp.VerifyAssertion(ch, cred, clientDataJSON, authenticatorData, sign
   16 bytes, equal to authData's AAGUID), and a refusal matches
   `ErrAAGUIDExtensionMissing`, `ErrAAGUIDExtensionMalformed` or
   `ErrAAGUIDExtensionMismatch` as well as `ErrAttestation`. Off by default.
+- CTAP2-native clients (no browser, no clientDataJSON):
+  `VerifyAttestationStatement(rpID, format, authData, attStmt, clientDataHash, policy)`
+  runs the same checks on separate fields, with the signature over
+  authData || clientDataHash for a hash the caller computed itself. It accepts chains
+  like `VerifyRegistrationAttested` and returns the `Credential` and `Attestation`.
+  The caller owns challenge freshness: nothing here can tell a replayed hash from a
+  fresh one. `VerifyRegistrationAttested` is this function behind the clientDataJSON
+  checks: one implementation.
 - Spec: W3C Web Authentication Level 3 sections 7.1, 7.2, 6.1, 6.5.1, 8.2, 8.7,
   13.4.3; RFC 9052/9053 (COSE), RFC 8949 section 4.2 (deterministic CBOR).
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.0
+
+- `VerifyAttestationStatement(rpID, format, authData, attStmt, clientDataHash, policy)`:
+  the browser-independent core of registration, for a CTAP2-native relying
+  party that signs its own `clientDataHash` and carries fmt, authData and
+  attStmt (CBOR) as separate fields. In order: authData parse, rpIdHash ==
+  sha256(rpID), UP / UV / BE-BS flags per `Policy`, the statement signature over
+  authData || clientDataHash, the certificate rules of WebAuthn Level 3
+  section 8.2.1, `Policy.RequireAAGUIDExtension`. It returns the `Credential`
+  and the `Attestation` for `VerifyTrustPath`. The caller owns challenge
+  freshness: no clientDataJSON, type or origin is checked. Chains are accepted
+  as in `VerifyRegistrationAttested`.
+- `VerifyRegistrationAttested` and `VerifyRegistration` now share this
+  implementation (one code path); behaviour and error texts are unchanged.
+  New fuzz target `FuzzVerifyAttestationStatement`.
+
 ## v0.4.0
 
 - `Policy.RequireAAGUIDExtension` (default false, behaviour unchanged): makes
