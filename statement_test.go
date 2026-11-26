@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,15 +84,17 @@ func TestVerifyAttestationStatementMalformedInput(t *testing.T) {
 	for name, c := range map[string]struct {
 		ad, stmt []byte
 		want     error
+		text     string
 	}{
-		"stmt not CBOR":     {ad, []byte{0xff}, ErrAttestation},
-		"stmt not a map":    {ad, enc("x"), ErrAttestation},
-		"stmt trailing":     {ad, append(append([]byte(nil), stmt...), 0), ErrAttestation},
-		"authData short":    {ad[:10], stmt, ErrAuthData},
-		"authData no AT":    {authData(testRP.ID, flagsOK, 0), stmt, ErrAuthData},
-		"authData trailing": {append(append([]byte(nil), ad...), 0), stmt, ErrTrailingBytes},
+		"stmt not CBOR":     {ad, []byte{0xff}, ErrAttestation, "attStmt: "},
+		"stmt not a map":    {ad, enc("x"), ErrAttestation, "must be a CBOR map"},
+		"stmt trailing":     {ad, append(append([]byte(nil), stmt...), 0), ErrAttestation, "attStmt: "},
+		"authData short":    {ad[:10], stmt, ErrAuthData, ""},
+		"authData no AT":    {authData(testRP.ID, flagsOK, 0), stmt, ErrAuthData, ""},
+		"authData trailing": {append(append([]byte(nil), ad...), 0), stmt, ErrTrailingBytes, ""},
 	} {
-		if _, _, err := VerifyAttestationStatement(testRP.ID, "packed", c.ad, c.stmt, hash, Policy{}); !errors.Is(err, c.want) {
+		_, _, err := VerifyAttestationStatement(testRP.ID, "packed", c.ad, c.stmt, hash, Policy{})
+		if !errors.Is(err, c.want) || (err != nil && !strings.Contains(err.Error(), c.text)) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
